@@ -1,0 +1,13 @@
+{
+  "baseUrl": "https://console.nace.ai/v1",
+  "path": "/systemone",
+  "keyEnv": "NACE_API_KEY",
+  "baseUrlEnv": "NACE_BASE_URL",
+  "modelEnv": "NACE_MODEL",
+  "defaultModel": "drex-v2.0",
+  "attributionHeader": "X-Nace-Client",
+  "clients": {
+    "opencode": "jev-router-opencode",
+    "cursor": "jev-router-cursor"
+  }
+}

@@ -1,8 +1,8 @@
 // Offline eval harness for issue #1.
 // Mock-first: deterministic simulation of Jev scores, clearly labeled.
 // Live path (`--live`) replays the same tasks through real `systemOne`
-// when TYPESAFE_API_KEY / OPENROUTER_API_KEY is present; otherwise it
-// falls back to mock with a warning.
+// when TYPESAFE_API_KEY / OPENROUTER_API_KEY is present, or with
+// JEV_PROVIDER=nace and NACE_API_KEY; otherwise it falls back to mock with a warning.
 //
 // Threshold sweep is exact without re-calling Jev: gate/fits thresholds
 // are applied post-hoc to recorded scores, so one pass per task yields
@@ -367,8 +367,11 @@ function round5(n: number): number {
 import {
   GATE_QUESTIONS,
   ranked,
+  parseProvider,
+  resolveBackend,
   systemOne,
   type JevOptions,
+  type Provider,
 } from "../plugins/jev-router/jev.js";
 
 const INVERTED_LIVE = new Set(["prose_suffices"]);
@@ -382,7 +385,11 @@ export interface LiveMeta {
   errors: string[];
 }
 
-export function resolveLiveOpts(): (JevOptions & { provider: "typesafe" | "openrouter" }) | null {
+export function resolveLiveOpts(): (JevOptions & { provider: Provider }) | null {
+  if (parseProvider(process.env["JEV_PROVIDER"]) === "nace") {
+    const nace = resolveBackend({});
+    return nace.apiKey ? { ...nace, timeoutMs: 15000 } : null;
+  }
   if (process.env["TYPESAFE_API_KEY"]) {
     return {
       provider: "typesafe",
