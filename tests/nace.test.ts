@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  NACE,
   NACE_CLIENT,
   choiceMargin,
   confidence,
@@ -72,6 +73,49 @@ describe("resolveBackend", () => {
     expect(() => parseProvider("Drex")).toThrow();
     expect(parseProvider("  NACE ")).toBe("nace");
     expect(parseProvider("")).toBeUndefined();
+  });
+});
+
+describe("a selected backend reads only its own settings", () => {
+  let fake: FakeNace;
+  let other: FakeNace;
+  beforeEach(() => {
+    fake = startFakeNace();
+    other = startFakeNace();
+  });
+  afterEach(() => {
+    fake.stop();
+    other.stop();
+  });
+  const naceEnv = () => ({ NACE_API_KEY: "nace_sk_envkey", NACE_BASE_URL: `${fake.url}/v1` });
+  const send = (options: Parameters<typeof resolveBackend>[0], env: Record<string, string>) =>
+    systemOne({}, questions, { ...resolveBackend(options, env), timeoutMs: 2000 });
+
+  test("the generic model option, which the repo's own opencode.jsonc sets to jev-latest, never reaches a Nace request", async () => {
+    await send({ provider: "nace", model: "jev-latest" }, naceEnv());
+    expect(fake.requests[0].body.model).toBe(NACE.defaultModel);
+  });
+
+  test("the generic endpoint option never receives the Nace key", async () => {
+    await send({ provider: "nace", endpoint: other.url }, naceEnv());
+    expect(other.requests).toHaveLength(0);
+    expect(fake.requests).toHaveLength(1);
+  });
+
+  test("the generic apiKey option is never sent to Nace", async () => {
+    await send({ provider: "nace", apiKey: "ts-key-from-options" }, naceEnv());
+    expect(fake.requests[0].headers.get("authorization")).toBe("Bearer nace_sk_envkey");
+  });
+
+  test("Nace settings never reach a TypeSafe or OpenRouter request", async () => {
+    const env = { ...naceEnv(), NACE_MODEL: "drex-max-v1.1", TYPESAFE_API_KEY: "ts-key", TYPESAFE_ENDPOINT: other.url };
+    await send({}, env);
+    expect(fake.requests).toHaveLength(0);
+    expect(other.requests[0].headers.get("authorization")).toBe("Bearer ts-key");
+    expect(other.requests[0].body.model).toBe("jev-latest");
+    expect(other.requests[0].headers.get("x-nace-client")).toBeNull();
+    const or = resolveBackend({}, { ...naceEnv(), NACE_MODEL: "drex-max-v1.1", OPENROUTER_API_KEY: "sk-or" });
+    expect(or).toEqual({ provider: "openrouter", apiKey: "sk-or", endpoint: "", model: "typesafe/jev-1.13" });
   });
 });
 

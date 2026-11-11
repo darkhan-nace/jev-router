@@ -31,9 +31,11 @@ type Mode3 = "off" | "suggest" | "redirect";
 interface Options {
   /** "typesafe" (default), "openrouter" or "nace". JEV_PROVIDER, then the key in env, when omitted; "nace" is never auto-detected. */
   provider?: Provider;
-  /** TypeSafe API key, OpenRouter key when provider is openrouter, Nace key when provider is nace. */
+  /** TypeSafe API key, or OpenRouter key when provider is openrouter. Ignored for Nace (NACE_API_KEY). */
   apiKey?: string;
+  /** Ignored for Nace (NACE_BASE_URL). */
   endpoint?: string;
+  /** Ignored for Nace (NACE_MODEL). */
   model?: string;
   /** Below this mean gate score, suggest nothing. Default 0.3. */
   gateThreshold?: number;

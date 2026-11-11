@@ -28,8 +28,10 @@ export function parseProvider(raw: string | undefined): Provider | undefined {
 
 /**
  * Pick the backend and read its key, endpoint and model. An explicit `provider` option,
- * then JEV_PROVIDER, then whichever key is set. Nace reads only its own variables, so a
- * TypeSafe setup left in the environment never redirects its key or model.
+ * then JEV_PROVIDER, then whichever key is set. Nace reads only its own variables, and
+ * ignores the generic `apiKey`, `endpoint` and `model` options, which are TypeSafe and
+ * OpenRouter settings (the repo's own opencode.jsonc sets `model` to `jev-latest`), so
+ * nothing aimed at another provider can redirect its key or model.
  */
 export function resolveBackend(
   raw: { provider?: string; apiKey?: string; endpoint?: string; model?: string },
@@ -42,9 +44,9 @@ export function resolveBackend(
   if (provider === "nace") {
     return {
       provider,
-      apiKey: raw.apiKey ?? env[nace.keyEnv] ?? "",
-      endpoint: raw.endpoint ?? env[nace.baseUrlEnv] ?? "",
-      model: raw.model ?? env[nace.modelEnv] ?? nace.defaultModel,
+      apiKey: env[nace.keyEnv] ?? "",
+      endpoint: env[nace.baseUrlEnv] ?? "",
+      model: env[nace.modelEnv] ?? nace.defaultModel,
     };
   }
   const openrouter = provider === "openrouter";
