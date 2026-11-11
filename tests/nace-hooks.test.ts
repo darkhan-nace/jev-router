@@ -243,6 +243,21 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
     expect(fake.requests).toHaveLength(0);
   });
 
+  test.each(["jev_policy.py", "jev_verify.py", "jev_review.py"])(
+    "a NACE_BASE_URL that cannot be parsed fails open in %s and sends nothing",
+    async (script) => {
+      for (const url of ["http://[::1", "https://[::1:3000"]) {
+        const { stdout, stderr } = await runHook(script, { ...payload, status: "completed", summary: "changed auth" }, {
+          ...nace(),
+          NACE_BASE_URL: url,
+        });
+        expect(stdout.permission === undefined || stdout.permission === "allow", url).toBe(true);
+        expect(stderr.trim(), url).toBe("[jev-router] nace: refusing to send the key to that URL: not a valid URL");
+      }
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
+
   test.each([
     ["https://user:hunter2@console.nace.ai/v1", "the URL contains credentials"],
     ["ftp://console.nace.ai/v1", "the scheme must be https"],

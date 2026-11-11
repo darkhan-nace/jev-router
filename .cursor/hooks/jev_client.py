@@ -62,6 +62,14 @@ def nace_url_problem(url):
     return "plain http is only allowed to localhost, 127.0.0.1 or ::1"
 
 
+def _host_of(url):
+    """The host a refusal line names, or "that URL" when the URL has none or cannot be parsed."""
+    try:
+        return urllib.parse.urlsplit(url).hostname or "that URL"
+    except ValueError:
+        return "that URL"
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -160,8 +168,7 @@ def system_one(state, questions, timeout=TIMEOUT_S, model=None):
         return None
     refusal = nace_url_problem(cfg["url"]) if is_nace else None
     if refusal:
-        host = urllib.parse.urlsplit(cfg["url"]).hostname or "that URL"
-        _log("nace: refusing to send the key to %s: %s" % (host, refusal))
+        _log("nace: refusing to send the key to %s: %s" % (_host_of(cfg["url"]), refusal))
         return None
     body = json.dumps(
         {
