@@ -78,13 +78,15 @@ default `stop`) and `reviewModel` (`auto` or pinned id). See `opencode.jsonc`.
 
 - One API key: `TYPESAFE_API_KEY` (https://console.typesafe.ai/keys) **or**
   `OPENROUTER_API_KEY` (https://openrouter.ai/settings/keys). `TYPESAFE_API_KEY`
-  wins when both are set.
+  wins when both are set. For [Nace](#nace-backend), `NACE_API_KEY` plus an
+  explicit `JEV_PROVIDER=nace`; a Nace key alone selects nothing.
 - No GPU, no local model. Either way Jev is hosted.
 
 | Provider | Endpoint | Default model |
 | --- | --- | --- |
 | TypeSafe direct | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` |
 | OpenRouter | `POST https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.13` (pinned; use `~typesafe/jev-latest` to track releases) |
+| Nace (explicit) | `POST https://console.nace.ai/v1/systemone` | `drex-v2.0` (pinned; `drex-latest` tracks the current default) |
 
 Same question shape on both; OpenRouter adds `usage.cost` per call. Same price:
 $0.042 per Mtok input, output free. Tutorial:
@@ -106,7 +108,7 @@ docs/judgements.md              new-judgement eval (live trial)
 ## OpenCode quickstart
 
 ```sh
-opencode plugin add github:drmaas/jev-router
+opencode plugin add 'git+https://github.com/drmaas/jev-router.git#path:plugins/jev-router'
 export TYPESAFE_API_KEY=ts- replace-with-real-key
 # ...or use OpenRouter instead:
 export OPENROUTER_API_KEY=sk-or- replace-with-real-key
@@ -140,6 +142,44 @@ cp skills/jev-router/SKILL.md ~/.agents/skills/jev-router/SKILL.md
 
 The upstream TypeSafe skill (teaches the LLM to write TypeSafe calls) is separate:
 https://github.com/typesafe-ai/skills/blob/main/skills/typesafe-ai/SKILL.md
+
+## Nace backend
+
+[Nace](https://console.nace.ai) serves the same typed `choice`, `noul` and `score` questions
+(Drex models) at `POST /v1/systemone`, so the question builders, thresholds, timeouts and
+fail-open behavior are unchanged. Nace is opt-in: no key or variable auto-selects it, and
+while it is selected the `TYPESAFE_*`, `OPENROUTER_*` and `JEV_ENDPOINT` variables are ignored.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `JEV_PROVIDER=nace` | Choose Nace (OpenCode also accepts `provider: "nace"` in the plugin options) | unset |
+| `NACE_API_KEY` | Your `nace_sk_` key (https://console.nace.ai) | none, calls are skipped |
+| `NACE_MODEL` | `drex-v2.0`, `drex-max-v1.1` or `drex-latest` | `drex-v2.0` |
+| `NACE_BASE_URL` | API base URL, https or loopback http only | `https://console.nace.ai/v1` |
+
+Every Nace request carries `X-Nace-Client: jev-router-opencode/<version>` (OpenCode plugin) or
+`jev-router-cursor/<version>` (Cursor hooks). The endpoint, key variables, default model and
+client names live in `nace.json`, kept identical in `plugins/jev-router/` and `.cursor/hooks/`.
+A Nace request never follows a redirect, and a failure (bad key, unknown model, timeout) is
+printed to stderr as status, error type and `request_id`, then fails open as before.
+It never retries another provider.
+
+OpenCode v2:
+
+```sh
+opencode plugin add 'git+https://github.com/drmaas/jev-router.git#path:plugins/jev-router'
+export JEV_PROVIDER=nace NACE_API_KEY=nace_sk_replace-with-real-key
+```
+
+or pin it in the project's `opencode.jsonc` with options:
+
+```jsonc
+{ "plugins": [{ "package": "git+https://github.com/drmaas/jev-router.git#path:plugins/jev-router",
+                "options": { "provider": "nace", "model": "drex-v2.0" } }] }
+```
+
+Cursor: copy `.cursor/hooks.json` and the whole `.cursor/hooks/` folder (including `nace.json`),
+then start Cursor with `JEV_PROVIDER=nace` and `NACE_API_KEY` in its environment.
 
 ## What Jev is not
 
