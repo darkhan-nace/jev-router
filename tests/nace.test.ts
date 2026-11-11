@@ -61,7 +61,7 @@ describe("resolveBackend", () => {
       { provider: "nace" },
       { TYPESAFE_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or", TYPESAFE_ENDPOINT: "https://other", TYPESAFE_MODEL: "jev-latest", JEV_ENDPOINT: "https://other" },
     );
-    expect(b).toEqual({ provider: "nace", apiKey: "", endpoint: "", model: "drex-v2.0", problem: "No API key set (NACE_API_KEY)" });
+    expect(b).toEqual({ provider: "nace", apiKey: "", endpoint: "", model: "drex-max-v1.1", problem: "No API key set (NACE_API_KEY)" });
   });
 
   test("an empty NACE_BASE_URL or NACE_MODEL means unset, as in the hooks", () => {
@@ -157,11 +157,15 @@ describe("a selected backend reads only its own settings", () => {
 });
 
 describe("decisionsRequest nace", () => {
-  test("default is console.nace.ai /v1/systemone on drex-v2.0", () => {
+  test("default is console.nace.ai /v1/systemone on drex-max-v1.1", () => {
     expect(decisionsRequest({ apiKey: "k", provider: "nace" })).toEqual({
       url: "https://console.nace.ai/v1/systemone",
-      model: "drex-v2.0",
+      model: "drex-max-v1.1",
     });
+  });
+  test("the default is a pinned version, so behaviour does not move when an alias does", () => {
+    expect(NACE.defaultModel).toMatch(/^drex-[a-z0-9.-]+$/);
+    expect(NACE.defaultModel).not.toContain("latest");
   });
   test("endpoint and model overrides", () => {
     expect(decisionsRequest({ apiKey: "k", provider: "nace", endpoint: "https://drex.nace.ai/v1/", model: "drex-latest" })).toEqual({
@@ -213,7 +217,7 @@ describe("systemOne against nace", () => {
     expect(NACE_CLIENT.length).toBeLessThanOrEqual(64);
     expect(NACE_CLIENT).toMatch(/^[A-Za-z0-9 ._@+-]+\/[A-Za-z0-9 ._@+-]+$/);
     expect(r.headers.get("authorization")).toBe("Bearer nace_sk_testkey");
-    expect(r.body.model).toBe("drex-v2.0");
+    expect(r.body.model).toBe("drex-max-v1.1");
     expect(Object.keys(r.body.questions)).toEqual(["which", "gate::acts_on_user_system"]);
     expect(r.body.state).toEqual({ request: "fill the form" });
   });
