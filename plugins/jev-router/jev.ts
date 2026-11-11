@@ -17,18 +17,20 @@ export const NACE_CLIENT = `${nace.clients.opencode}/${pkg.version}`;
 export const PROVIDERS = ["typesafe", "openrouter", "nace"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
-/** Parse an explicit provider choice. Undefined when unset; throws on an unknown name. */
-export function parseProvider(raw: string | undefined): Provider | undefined {
-  const name = raw?.trim().toLowerCase();
-  if (!name) return undefined;
-  const found = PROVIDERS.find((p) => p === name);
-  if (!found) throw new Error(`unknown provider "${raw}" (expected ${PROVIDERS.join(", ")})`);
-  return found;
+export interface Backend {
+  provider: Provider;
+  apiKey: string;
+  endpoint: string;
+  model: string;
+  /** Why this backend sends nothing: an unknown provider, or no key. Set exactly when `apiKey` is empty. */
+  problem?: string;
 }
 
 /**
  * Pick the backend and read its key, endpoint and model. An explicit `provider` option,
- * then JEV_PROVIDER, then whichever key is set. Nace reads only its own variables, and
+ * then JEV_PROVIDER, then whichever key is set. Never throws: an unknown provider name
+ * gives a backend with no key and a `problem`, so a typo skips Jev instead of stopping the
+ * plugin, and never falls back to another provider. Nace reads only its own variables, and
  * ignores the generic `apiKey`, `endpoint` and `model` options, which are TypeSafe and
  * OpenRouter settings (the repo's own opencode.jsonc sets `model` to `jev-latest`), so
  * nothing aimed at another provider can redirect its key or model.
@@ -36,11 +38,27 @@ export function parseProvider(raw: string | undefined): Provider | undefined {
 export function resolveBackend(
   raw: { provider?: string; apiKey?: string; endpoint?: string; model?: string },
   env: Record<string, string | undefined> = process.env,
-): { provider: Provider; apiKey: string; endpoint: string; model: string } {
+): Backend {
+  const source = raw.provider?.trim()
+    ? { name: "provider option", value: raw.provider }
+    : { name: "JEV_PROVIDER", value: env["JEV_PROVIDER"] };
+  const named = source.value?.trim().toLowerCase();
+  const chosen = PROVIDERS.find((p) => p === named);
+  if (named && !chosen) {
+    const valid = PROVIDERS.join(", ");
+    return { provider: "typesafe", apiKey: "", endpoint: "", model: "", problem: `unknown ${source.name} "${source.value}" (valid values: ${valid})` };
+  }
   const provider: Provider =
-    parseProvider(raw.provider) ??
-    parseProvider(env["JEV_PROVIDER"]) ??
-    (env["TYPESAFE_API_KEY"] ? "typesafe" : env["OPENROUTER_API_KEY"] ? "openrouter" : "typesafe");
+    chosen ?? (env["TYPESAFE_API_KEY"] ? "typesafe" : env["OPENROUTER_API_KEY"] ? "openrouter" : "typesafe");
+  const backend = pickBackend(provider, raw, env);
+  return backend.apiKey ? backend : { ...backend, problem: noKeyProblem(provider, env) };
+}
+
+function pickBackend(
+  provider: Provider,
+  raw: { apiKey?: string; endpoint?: string; model?: string },
+  env: Record<string, string | undefined>,
+): Backend {
   if (provider === "nace") {
     return {
       provider,
@@ -56,6 +74,12 @@ export function resolveBackend(
     endpoint: raw.endpoint ?? env["TYPESAFE_ENDPOINT"] ?? env["JEV_ENDPOINT"] ?? "",
     model: raw.model ?? env["TYPESAFE_MODEL"] ?? (openrouter ? DEFAULT_OPENROUTER_MODEL : DEFAULT_MODEL),
   };
+}
+
+function noKeyProblem(provider: Provider, env: Record<string, string | undefined>): string {
+  if (provider === "nace") return `No API key set (${nace.keyEnv})`;
+  const base = "No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY)";
+  return env[nace.keyEnv] ? `${base}; ${nace.keyEnv} is set, but Nace needs JEV_PROVIDER=nace` : base;
 }
 
 /** Nace carries the key, so it goes only over https, or http to this machine. */

@@ -6,7 +6,6 @@ import {
   confidence,
   decisionsRequest,
   naceUrlAllowed,
-  parseProvider,
   ranked,
   resolveBackend,
   systemOne,
@@ -61,18 +60,45 @@ describe("resolveBackend", () => {
       { provider: "nace" },
       { TYPESAFE_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or", TYPESAFE_ENDPOINT: "https://other", TYPESAFE_MODEL: "jev-latest", JEV_ENDPOINT: "https://other" },
     );
-    expect(b).toEqual({ provider: "nace", apiKey: "", endpoint: "", model: "drex-v2.0" });
+    expect(b).toEqual({ provider: "nace", apiKey: "", endpoint: "", model: "drex-v2.0", problem: "No API key set (NACE_API_KEY)" });
   });
 
   test("the option beats JEV_PROVIDER", () => {
     expect(resolveBackend({ provider: "openrouter" }, { JEV_PROVIDER: "nace" }).provider).toBe("openrouter");
   });
 
-  test("an unknown provider throws instead of falling back", () => {
-    expect(() => resolveBackend({ provider: "nacee" }, { TYPESAFE_API_KEY: "ts" })).toThrow('unknown provider "nacee"');
-    expect(() => parseProvider("Drex")).toThrow();
-    expect(parseProvider("  NACE ")).toBe("nace");
-    expect(parseProvider("")).toBeUndefined();
+  test("an unknown provider never throws and never falls back to another one", () => {
+    const keys = { TYPESAFE_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or", NACE_API_KEY: "nace_sk_x" };
+    const line = (name: string, source: string) =>
+      `unknown ${source} "${name}" (valid values: typesafe, openrouter, nace)`;
+    const viaOption = resolveBackend({ provider: "nacee", apiKey: "ts" }, keys);
+    expect(viaOption.apiKey).toBe("");
+    expect(viaOption.problem).toBe(line("nacee", "provider option"));
+    const viaEnv = resolveBackend({}, { ...keys, JEV_PROVIDER: "Drex" });
+    expect(viaEnv.apiKey).toBe("");
+    expect(viaEnv.problem).toBe(line("Drex", "JEV_PROVIDER"));
+  });
+
+  test("a valid provider option wins over a bad JEV_PROVIDER, and names are case and space insensitive", () => {
+    expect(resolveBackend({ provider: "openrouter" }, { JEV_PROVIDER: "nacee", OPENROUTER_API_KEY: "sk-or" }).problem).toBeUndefined();
+    expect(resolveBackend({}, { JEV_PROVIDER: "  NACE ", NACE_API_KEY: "k" }).provider).toBe("nace");
+    expect(resolveBackend({}, { JEV_PROVIDER: "" }).provider).toBe("typesafe");
+  });
+
+  test("with only NACE_API_KEY set the missing-key hint says Nace needs JEV_PROVIDER=nace", () => {
+    const hint = resolveBackend({}, { NACE_API_KEY: "nace_sk_x" }).problem;
+    expect(hint).toBe(
+      "No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY); NACE_API_KEY is set, but Nace needs JEV_PROVIDER=nace",
+    );
+  });
+
+  test("the missing-key hint is the one the TypeSafe user always had when no Nace key is set", () => {
+    expect(resolveBackend({}, {}).problem).toBe("No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY)");
+    expect(resolveBackend({}, { TYPESAFE_API_KEY: "ts" }).problem).toBeUndefined();
+  });
+
+  test("a missing Nace key names NACE_API_KEY only", () => {
+    expect(resolveBackend({ provider: "nace" }, { TYPESAFE_API_KEY: "ts" }).problem).toBe("No API key set (NACE_API_KEY)");
   });
 });
 

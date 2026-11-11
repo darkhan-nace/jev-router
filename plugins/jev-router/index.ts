@@ -1,6 +1,5 @@
 import { Plugin } from "@opencode/plugin";
 import {
-  NACE,
   applyToolThresholds,
   choiceMargin,
   clarifyQuestions,
@@ -22,6 +21,7 @@ import {
   toolSteerQuestions,
   toolSuggestionBlock,
   ranked,
+  type Backend,
   type Provider,
   type Question,
 } from "./jev.js";
@@ -74,11 +74,7 @@ interface Options {
   reviewModels?: string[];
 }
 
-interface Resolved {
-  provider: Provider;
-  apiKey: string;
-  endpoint: string;
-  model: string;
+interface Resolved extends Backend {
   gateThreshold: number;
   fitsThreshold: number;
   autoPermission: boolean;
@@ -140,10 +136,6 @@ const EDIT_TOOL = /(edit|write|apply|patch|create)/i;
 const COMPLETION_CLAIM =
   /\b(done|complete|completed|finished|fixed|all tests pass|ready( for review)?|lgtm)\b/i;
 
-function keyHint(provider: Provider): string {
-  return provider === "nace" ? NACE.keyEnv : "TYPESAFE_API_KEY or OPENROUTER_API_KEY";
-}
-
 function jevOptsOf(o: Resolved): {
   apiKey: string;
   provider?: Provider;
@@ -164,10 +156,8 @@ export default Plugin.define({
   id: "jev-router",
   async setup(ctx) {
     const opts = resolveOpts((ctx.options ?? {}) as Options);
-    if (!opts.apiKey) {
-      console.error(
-        `[jev-router] No API key set (${keyHint(opts.provider)}); Jev calls will be skipped (fail open).`,
-      );
+    if (opts.problem) {
+      console.error(`[jev-router] ${opts.problem}; Jev calls will be skipped (fail open).`);
     }
     const sessions = new Map<string, SessionState>();
     const stateFor = (sid: string): SessionState => {
@@ -630,7 +620,7 @@ export default Plugin.define({
         options: { namespace: "jev", codemode: true },
         execute: async (input, context) => {
           if (!opts.apiKey) {
-            return { content: `jev_ask unavailable: no API key set (${keyHint(opts.provider)}).` };
+            return { content: `jev_ask unavailable: ${opts.problem}.` };
           }
           const { state, questions } = input as {
             state: unknown;

@@ -84,9 +84,18 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
     expect(fake.requests[0].body.model).toBe("jev-latest");
   });
 
-  test("a NACE_API_KEY alone does not switch the hooks to nace", async () => {
-    await runHook("jev_policy.py", payload, { NACE_API_KEY: "nace_sk_testkey", NACE_BASE_URL: `${fake.url}/v1` });
+  test("a NACE_API_KEY alone does not switch the hooks to nace, and stderr says what it needs", async () => {
+    const { stderr } = await runHook("jev_policy.py", payload, { NACE_API_KEY: "nace_sk_testkey", NACE_BASE_URL: `${fake.url}/v1` });
     expect(fake.requests).toHaveLength(0);
+    expect(stderr.trim()).toBe(
+      "[jev-router] No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY); NACE_API_KEY is set, but Nace needs JEV_PROVIDER=nace; Jev calls will be skipped (fail open).",
+    );
+  });
+
+  test("with no key at all the hooks stay as silent as upstream's", async () => {
+    const { stdout, stderr } = await runHook("jev_policy.py", payload, { TYPESAFE_ENDPOINT: fake.url });
+    expect(stdout).toEqual({ continue: true, permission: "allow" });
+    expect(stderr).toBe("");
   });
 
   test("a missing NACE_API_KEY allows, names the variable and calls nobody, even with other keys set", async () => {
@@ -96,20 +105,27 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
       TYPESAFE_ENDPOINT: fake.url,
     });
     expect(stdout).toEqual({ continue: true, permission: "allow" });
-    expect(stderr).toContain("NACE_API_KEY is not set");
+    expect(stderr.trim()).toBe("[jev-router] No API key set (NACE_API_KEY); Jev calls will be skipped (fail open).");
     expect(fake.requests).toHaveLength(0);
   });
 
-  test("an unknown JEV_PROVIDER allows, says so and calls nobody", async () => {
-    const { stdout, stderr } = await runHook("jev_policy.py", payload, {
-      JEV_PROVIDER: "nacee",
-      TYPESAFE_API_KEY: "ts-key",
-      TYPESAFE_ENDPOINT: fake.url,
-    });
-    expect(stdout).toEqual({ continue: true, permission: "allow" });
-    expect(stderr).toContain('unknown JEV_PROVIDER "nacee"');
-    expect(fake.requests).toHaveLength(0);
-  });
+  test.each(["jev_policy.py", "jev_verify.py", "jev_review.py"])(
+    "an unknown JEV_PROVIDER in %s prints one line naming the valid values and calls nobody",
+    async (script) => {
+      const { stdout, stderr } = await runHook(script, { ...payload, status: "completed", summary: "changed auth" }, {
+        JEV_PROVIDER: "nacee",
+        NACE_API_KEY: "nace_sk_testkey",
+        NACE_BASE_URL: `${fake.url}/v1`,
+        TYPESAFE_API_KEY: "ts-key",
+        TYPESAFE_ENDPOINT: fake.url,
+      });
+      expect(stdout.permission === undefined || stdout.permission === "allow").toBe(true);
+      expect(stderr.trim()).toBe(
+        '[jev-router] unknown JEV_PROVIDER "nacee" (valid values: typesafe, openrouter, nace); Jev calls will be skipped (fail open).',
+      );
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
 
   test.each([
     [401, "authentication_error"],

@@ -35,3 +35,10 @@ test("a live eval on Nace reports no cost, because the harness only knows TypeSa
   expect(Object.keys(report.liveMeta)).not.toContain("totalJevCost");
   expect(Object.keys(report.cells[0]).filter((k) => /cost|saved|net/i.test(k))).toEqual([]);
 });
+
+test("a live eval with a mistyped JEV_PROVIDER says so and falls back to the mock, whatever other keys are set", async () => {
+  const { stdout, stderr } = await liveEval({ JEV_PROVIDER: "naec", TYPESAFE_API_KEY: "ts-key", TYPESAFE_ENDPOINT: fake.url });
+  expect(JSON.parse(stdout).mode).toBe("mock-simulated");
+  expect(stderr).toContain('unknown JEV_PROVIDER "naec" (valid values: typesafe, openrouter, nace)');
+  expect(fake.requests).toHaveLength(0);
+});

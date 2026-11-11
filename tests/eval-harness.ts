@@ -367,7 +367,6 @@ function round5(n: number): number {
 import {
   GATE_QUESTIONS,
   ranked,
-  parseProvider,
   resolveBackend,
   systemOne,
   type JevOptions,
@@ -386,9 +385,11 @@ export interface LiveMeta {
 }
 
 export function resolveLiveOpts(): (JevOptions & { provider: Provider }) | null {
-  if (parseProvider(process.env["JEV_PROVIDER"]) === "nace") {
-    const nace = resolveBackend({});
-    return nace.apiKey ? { ...nace, timeoutMs: 15000 } : null;
+  const chosen = resolveBackend({});
+  if (chosen.provider === "nace") return chosen.apiKey ? { ...chosen, timeoutMs: 15000 } : null;
+  if (chosen.problem?.startsWith("unknown")) {
+    console.error(`[eval] ${chosen.problem}`);
+    return null;
   }
   if (process.env["TYPESAFE_API_KEY"]) {
     return {

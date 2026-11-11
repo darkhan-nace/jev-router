@@ -25,8 +25,23 @@ VERSION = "0.1.0"
 PROVIDERS = ("typesafe", "openrouter", "nace")
 
 
+_logged = set()
+
+
 def _log(message):
     print("[jev-router] " + message, file=sys.stderr)
+
+
+def _log_once(message):
+    """A hook makes several calls with one configuration; say a configuration problem once."""
+    if message not in _logged:
+        _logged.add(message)
+        _log(message)
+
+
+def _no_key(provider, problem=None):
+    """A configuration that sends nothing. `problem` is what stderr says; None stays silent."""
+    return {"provider": provider, "api_key": "", "url": "", "model": "", "nace": None, "problem": problem}
 
 
 def nace_url_allowed(url):
@@ -59,16 +74,27 @@ def _nace_config():
     try:
         nace = load_nace()
     except (OSError, ValueError) as e:
-        _log("nace: cannot read nace.json (%s); skipping Jev (fail open)" % type(e).__name__)
-        return {"provider": "nace", "api_key": "", "url": "", "model": "", "nace": None}
-    base = os.environ.get(nace["baseUrlEnv"], nace["baseUrl"]).rstrip("/")
+        return _no_key("nace", "nace: cannot read nace.json (%s)" % type(e).__name__)
+    base = (os.environ.get(nace["baseUrlEnv"]) or nace["baseUrl"]).rstrip("/")
+    api_key = os.environ.get(nace["keyEnv"], "")
     return {
         "provider": "nace",
-        "api_key": os.environ.get(nace["keyEnv"], ""),
+        "api_key": api_key,
         "url": base + nace["path"],
-        "model": os.environ.get(nace["modelEnv"], nace["defaultModel"]),
+        "model": os.environ.get(nace["modelEnv"]) or nace["defaultModel"],
         "nace": nace,
+        "problem": None if api_key else "No API key set (%s)" % nace["keyEnv"],
     }
+
+
+def _keyed_config(cfg):
+    """Upstream is silent when no key is set. The one hint added: a Nace key sits in the
+    environment, but Nace is chosen only with JEV_PROVIDER=nace."""
+    if not cfg["api_key"] and os.environ.get("NACE_API_KEY"):
+        cfg["problem"] = (
+            "No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY); NACE_API_KEY is set, but Nace needs JEV_PROVIDER=nace"
+        )
+    return cfg
 
 
 def config():
@@ -76,31 +102,35 @@ def config():
     Without it, auto-detect: TYPESAFE_API_KEY wins, else OPENROUTER_API_KEY.
     With neither key set, defaults to typesafe (fail open downstream).
     Nace is never auto-detected. An unknown JEV_PROVIDER yields a config with no
-    key, so nothing is sent anywhere."""
-    chosen = os.environ.get("JEV_PROVIDER", "").strip().lower()
+    key, so nothing is sent anywhere. `problem` is the reason a config has no key."""
+    raw = os.environ.get("JEV_PROVIDER", "")
+    chosen = raw.strip().lower()
     if chosen and chosen not in PROVIDERS:
-        _log('unknown JEV_PROVIDER "%s" (expected %s); skipping Jev (fail open)' % (chosen, ", ".join(PROVIDERS)))
-        return {"provider": chosen, "api_key": "", "url": "", "model": ""}
+        return _no_key(chosen, 'unknown JEV_PROVIDER "%s" (valid values: %s)' % (raw, ", ".join(PROVIDERS)))
     if chosen == "nace":
         return _nace_config()
     if chosen == "typesafe" or (
         not chosen and (os.environ.get("TYPESAFE_API_KEY") or not os.environ.get("OPENROUTER_API_KEY"))
     ):
         base = os.environ.get("TYPESAFE_ENDPOINT", DEFAULT_ENDPOINT).rstrip("/")
-        return {
-            "provider": "typesafe",
-            "api_key": os.environ.get("TYPESAFE_API_KEY", ""),
-            "url": base + "/v1/systemone",
-            "model": os.environ.get("TYPESAFE_MODEL", DEFAULT_MODEL),
-        }
+        return _keyed_config(
+            {
+                "provider": "typesafe",
+                "api_key": os.environ.get("TYPESAFE_API_KEY", ""),
+                "url": base + "/v1/systemone",
+                "model": os.environ.get("TYPESAFE_MODEL", DEFAULT_MODEL),
+            }
+        )
     base = os.environ.get("TYPESAFE_ENDPOINT", DEFAULT_OPENROUTER_ENDPOINT).rstrip("/")
     path = "" if base.endswith("/api/alpha/decisions") else "/api/alpha/decisions"
-    return {
-        "provider": "openrouter",
-        "api_key": os.environ.get("OPENROUTER_API_KEY", ""),
-        "url": base + path,
-        "model": os.environ.get("TYPESAFE_MODEL", DEFAULT_OPENROUTER_MODEL),
-    }
+    return _keyed_config(
+        {
+            "provider": "openrouter",
+            "api_key": os.environ.get("OPENROUTER_API_KEY", ""),
+            "url": base + path,
+            "model": os.environ.get("TYPESAFE_MODEL", DEFAULT_OPENROUTER_MODEL),
+        }
+    )
 
 
 def _report_nace_failure(e):
@@ -121,8 +151,8 @@ def system_one(state, questions, timeout=TIMEOUT_S, model=None):
     cfg = config()
     is_nace = cfg["provider"] == "nace"
     if not cfg["api_key"]:
-        if is_nace and cfg["nace"]:
-            _log("JEV_PROVIDER=nace but %s is not set; skipping Jev (fail open)" % cfg["nace"]["keyEnv"])
+        if cfg.get("problem"):
+            _log_once(cfg["problem"] + "; Jev calls will be skipped (fail open).")
         return None
     if is_nace and not nace_url_allowed(cfg["url"]):
         host = urllib.parse.urlsplit(cfg["url"]).hostname or "that URL"
