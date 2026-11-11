@@ -2,13 +2,17 @@
 """Shared Jev HTTP client. Stdlib only (urllib), no third-party dependencies.
 
 Reads TYPESAFE_API_KEY (and optionally TYPESAFE_MODEL / TYPESAFE_ENDPOINT)
-from the environment. Every function fails open: on missing key, timeout, or
-HTTP error it returns None instead of raising, so hooks never block the agent
-when Jev is unavailable.
+from the environment. JEV_PROVIDER=nace selects Nace instead (NACE_API_KEY,
+NACE_BASE_URL, NACE_MODEL; see nace.json). Every function fails open: on
+missing key, timeout, or HTTP error it returns None instead of raising, so
+hooks never block the agent when Jev is unavailable.
 """
 
 import json
 import os
+import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 
 DEFAULT_ENDPOINT = "https://api.typesafe.ai"
@@ -16,12 +20,72 @@ DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai"
 DEFAULT_MODEL = "jev-latest"
 DEFAULT_OPENROUTER_MODEL = "typesafe/jev-1.13"
 TIMEOUT_S = 12
+VERSION = "0.1.0"
+
+PROVIDERS = ("typesafe", "openrouter", "nace")
+
+
+def _log(message):
+    print("[jev-router] " + message, file=sys.stderr)
+
+
+def nace_url_allowed(url):
+    """Nace carries the key, so it goes only over https, or http to this machine."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname or ""
+    except ValueError:
+        return False
+    if u.username or u.password:
+        return False
+    if u.scheme == "https":
+        return bool(host)
+    return u.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def load_nace():
+    """The shared Nace descriptor, read only when Nace is chosen so a copy of the hooks
+    without nace.json still works for the other providers."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nace.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _nace_config():
+    try:
+        nace = load_nace()
+    except (OSError, ValueError) as e:
+        _log("nace: cannot read nace.json (%s); skipping Jev (fail open)" % type(e).__name__)
+        return {"provider": "nace", "api_key": "", "url": "", "model": "", "nace": None}
+    base = os.environ.get(nace["baseUrlEnv"], nace["baseUrl"]).rstrip("/")
+    return {
+        "provider": "nace",
+        "api_key": os.environ.get(nace["keyEnv"], ""),
+        "url": base + nace["path"],
+        "model": os.environ.get(nace["modelEnv"], nace["defaultModel"]),
+        "nace": nace,
+    }
 
 
 def config():
-    """Provider auto-detect: TYPESAFE_API_KEY wins, else OPENROUTER_API_KEY.
-    With neither key set, defaults to typesafe (fail open downstream)."""
-    if os.environ.get("TYPESAFE_API_KEY") or not os.environ.get("OPENROUTER_API_KEY"):
+    """JEV_PROVIDER picks the provider explicitly (typesafe, openrouter or nace).
+    Without it, auto-detect: TYPESAFE_API_KEY wins, else OPENROUTER_API_KEY.
+    With neither key set, defaults to typesafe (fail open downstream).
+    Nace is never auto-detected. An unknown JEV_PROVIDER yields a config with no
+    key, so nothing is sent anywhere."""
+    chosen = os.environ.get("JEV_PROVIDER", "").strip().lower()
+    if chosen and chosen not in PROVIDERS:
+        _log('unknown JEV_PROVIDER "%s" (expected %s); skipping Jev (fail open)' % (chosen, ", ".join(PROVIDERS)))
+        return {"provider": chosen, "api_key": "", "url": "", "model": ""}
+    if chosen == "nace":
+        return _nace_config()
+    if chosen == "typesafe" or (
+        not chosen and (os.environ.get("TYPESAFE_API_KEY") or not os.environ.get("OPENROUTER_API_KEY"))
+    ):
         base = os.environ.get("TYPESAFE_ENDPOINT", DEFAULT_ENDPOINT).rstrip("/")
         return {
             "provider": "typesafe",
@@ -39,10 +103,30 @@ def config():
     }
 
 
+def _report_nace_failure(e):
+    """One stderr line per failed Nace call: status, error type and request id, never the message."""
+    error_type = "unknown"
+    request_id = e.headers.get("x-request-id") or "none"
+    try:
+        body = json.loads(e.read().decode("utf-8"))
+        error_type = (body.get("error") or {}).get("type") or error_type
+        request_id = body.get("request_id") or request_id
+    except Exception:
+        pass
+    _log("nace request failed: %s %s request_id=%s" % (e.code, error_type, request_id))
+
+
 def system_one(state, questions, timeout=TIMEOUT_S, model=None):
     """POST a decision request. Returns the parsed JSON body, or None on failure."""
     cfg = config()
+    is_nace = cfg["provider"] == "nace"
     if not cfg["api_key"]:
+        if is_nace and cfg["nace"]:
+            _log("JEV_PROVIDER=nace but %s is not set; skipping Jev (fail open)" % cfg["nace"]["keyEnv"])
+        return None
+    if is_nace and not nace_url_allowed(cfg["url"]):
+        host = urllib.parse.urlsplit(cfg["url"]).hostname or "that URL"
+        _log("nace: refusing to send the key to %s; use https or a loopback host" % host)
         return None
     body = json.dumps(
         {
@@ -51,21 +135,27 @@ def system_one(state, questions, timeout=TIMEOUT_S, model=None):
             "model": model or cfg["model"],
         }
     ).encode("utf-8")
-    req = urllib.request.Request(
-        cfg["url"],
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + cfg["api_key"],
-        },
-        method="POST",
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + cfg["api_key"],
+    }
+    if is_nace:
+        headers[cfg["nace"]["attributionHeader"]] = cfg["nace"]["clients"]["cursor"] + "/" + VERSION
+    req = urllib.request.Request(cfg["url"], data=body, headers=headers, method="POST")
+    # urllib forwards Authorization across a redirect; Nace never redirects, so refuse one.
+    open_url = urllib.request.build_opener(_NoRedirect).open if is_nace else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
+        with open_url(req, timeout=timeout) as res:
             if res.status != 200:
                 return None
             return json.loads(res.read().decode("utf-8"))
-    except Exception:
+    except urllib.error.HTTPError as e:
+        if is_nace:
+            _report_nace_failure(e)
+        return None
+    except Exception as e:
+        if is_nace:
+            _log("nace request failed: " + type(e).__name__)
         return None
 
 

@@ -1,7 +1,6 @@
 import { Plugin } from "@opencode/plugin";
 import {
-  DEFAULT_MODEL,
-  DEFAULT_OPENROUTER_MODEL,
+  NACE,
   applyToolThresholds,
   choiceMargin,
   clarifyQuestions,
@@ -10,6 +9,7 @@ import {
   failureSignature,
   passesConfidence,
   redirectBlock,
+  resolveBackend,
   resolveReviewType,
   reviewGateQuestion,
   reviewTypeQuestions,
@@ -29,9 +29,9 @@ import {
 type Mode3 = "off" | "suggest" | "redirect";
 
 interface Options {
-  /** "typesafe" (default) or "openrouter". Auto-detected from env when omitted. */
+  /** "typesafe" (default), "openrouter" or "nace". JEV_PROVIDER, then the key in env, when omitted; "nace" is never auto-detected. */
   provider?: Provider;
-  /** TypeSafe API key, or OpenRouter key when provider is openrouter. */
+  /** TypeSafe API key, OpenRouter key when provider is openrouter, Nace key when provider is nace. */
   apiKey?: string;
   endpoint?: string;
   model?: string;
@@ -98,18 +98,8 @@ interface Resolved {
 }
 
 function resolveOpts(raw: Options): Resolved {
-  const provider: Provider =
-    raw.provider ??
-    (process.env["TYPESAFE_API_KEY"] ? "typesafe"
-      : process.env["OPENROUTER_API_KEY"] ? "openrouter"
-        : "typesafe");
-  const keyEnv = provider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY";
-  const defaultModel = provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : DEFAULT_MODEL;
   return {
-    provider,
-    apiKey: raw.apiKey ?? process.env[keyEnv] ?? "",
-    endpoint: raw.endpoint ?? process.env["TYPESAFE_ENDPOINT"] ?? process.env["JEV_ENDPOINT"] ?? "",
-    model: raw.model ?? process.env["TYPESAFE_MODEL"] ?? defaultModel,
+    ...resolveBackend(raw),
     gateThreshold: raw.gateThreshold ?? 0.3,
     fitsThreshold: raw.fitsThreshold ?? 0.3,
     autoPermission: raw.autoPermission ?? false,
@@ -148,6 +138,10 @@ const EDIT_TOOL = /(edit|write|apply|patch|create)/i;
 const COMPLETION_CLAIM =
   /\b(done|complete|completed|finished|fixed|all tests pass|ready( for review)?|lgtm)\b/i;
 
+function keyHint(provider: Provider): string {
+  return provider === "nace" ? NACE.keyEnv : "TYPESAFE_API_KEY or OPENROUTER_API_KEY";
+}
+
 function jevOptsOf(o: Resolved): {
   apiKey: string;
   provider?: Provider;
@@ -170,7 +164,7 @@ export default Plugin.define({
     const opts = resolveOpts((ctx.options ?? {}) as Options);
     if (!opts.apiKey) {
       console.error(
-        "[jev-router] No API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY); Jev calls will be skipped (fail open).",
+        `[jev-router] No API key set (${keyHint(opts.provider)}); Jev calls will be skipped (fail open).`,
       );
     }
     const sessions = new Map<string, SessionState>();
@@ -634,7 +628,7 @@ export default Plugin.define({
         options: { namespace: "jev", codemode: true },
         execute: async (input, context) => {
           if (!opts.apiKey) {
-            return { content: "jev_ask unavailable: no API key set (TYPESAFE_API_KEY or OPENROUTER_API_KEY)." };
+            return { content: `jev_ask unavailable: no API key set (${keyHint(opts.provider)}).` };
           }
           const { state, questions } = input as {
             state: unknown;
