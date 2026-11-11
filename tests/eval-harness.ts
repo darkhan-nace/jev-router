@@ -715,7 +715,15 @@ if (import.meta.main) {
     }
     const grid = [0.1, 0.2, 0.3, 0.4, 0.5];
     const cells = sweep(sims, grid, grid);
-    console.log(JSON.stringify({ mode: "live", liveMeta: meta, sims, cells, perms, stops, tools, clarifies, failures, reviews }, null, 2));
+    // The cost columns are priced per Mtok at TypeSafe's rate, which is wrong for Nace, so a Nace run reports none.
+    const shown =
+      liveOpts.provider === "nace"
+        ? {
+            liveMeta: (({ totalJevCost, ...rest }) => rest)(meta),
+            cells: cells.map(({ jevCost, llmSaved, net, ...counts }) => counts),
+          }
+        : { liveMeta: meta, cells };
+    console.log(JSON.stringify({ mode: "live", ...shown, sims, perms, stops, tools, clarifies, failures, reviews }, null, 2));
   } else {
     const { skillTasks: st, permissionTasks: pt, stopTasks: tt } = loadTasks();
     const sims = (st as SkillTask[]).map(simulateSkill);
