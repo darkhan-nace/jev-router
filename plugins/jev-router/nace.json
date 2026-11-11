@@ -4,7 +4,7 @@
   "keyEnv": "NACE_API_KEY",
   "baseUrlEnv": "NACE_BASE_URL",
   "modelEnv": "NACE_MODEL",
-  "defaultModel": "drex-v2.0",
+  "defaultModel": "drex-max-v1.1",
   "attributionHeader": "X-Nace-Client",
   "clientVersion": "0.1.0",
   "clients": {
