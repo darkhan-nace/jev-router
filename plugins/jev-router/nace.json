@@ -6,6 +6,7 @@
   "modelEnv": "NACE_MODEL",
   "defaultModel": "drex-v2.0",
   "attributionHeader": "X-Nace-Client",
+  "clientVersion": "0.1.0",
   "clients": {
     "opencode": "jev-router-opencode",
     "cursor": "jev-router-cursor"

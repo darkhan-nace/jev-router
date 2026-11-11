@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { NACE } from "../plugins/jev-router/jev";
 import { REQUEST_ID, drexError, startFakeNace, type FakeNace } from "./fake-nace";
 
 const root = join(import.meta.dir, "..");
@@ -32,12 +33,6 @@ describe("shared nace descriptor", () => {
     const plugin = readFileSync(join(root, "plugins", "jev-router", "nace.json"), "utf-8");
     expect(readFileSync(join(hooks, "nace.json"), "utf-8")).toBe(plugin);
   });
-
-  test("the hooks report the plugin's version", () => {
-    const pkg = JSON.parse(readFileSync(join(root, "plugins", "jev-router", "package.json"), "utf-8"));
-    const client = readFileSync(join(hooks, "jev_client.py"), "utf-8");
-    expect(client).toContain(`VERSION = "${pkg.version}"`);
-  });
 });
 
 describe.skipIf(!python)("cursor hooks against nace", () => {
@@ -61,7 +56,8 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
     const { stdout } = await runHook("jev_policy.py", payload, nace());
     const [r] = fake.requests;
     expect(r.path).toBe("/v1/systemone");
-    expect(r.headers.get("x-nace-client")).toMatch(/^jev-router-cursor\/\d+\.\d+\.\d+$/);
+    expect(r.headers.get("x-nace-client")).toBe(`jev-router-cursor/${NACE.clientVersion}`);
+    expect(NACE.clientVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(r.headers.get("authorization")).toBe("Bearer nace_sk_testkey");
     expect(r.body.model).toBe("drex-v2.0");
     expect(Object.keys(r.body.questions)).toEqual(["verdict"]);
@@ -154,7 +150,28 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
 
   test("plain http to a non-loopback host sends nothing", async () => {
     const { stderr } = await runHook("jev_policy.py", payload, { ...nace(), NACE_BASE_URL: "http://203.0.113.9/v1" });
-    expect(stderr).toContain("refusing to send the key to 203.0.113.9");
+    expect(stderr.trim()).toBe(
+      "[jev-router] nace: refusing to send the key to 203.0.113.9: plain http is only allowed to localhost, 127.0.0.1 or ::1",
+    );
     expect(fake.requests).toHaveLength(0);
+  });
+
+  test.each([
+    ["https://user:hunter2@console.nace.ai/v1", "the URL contains credentials"],
+    ["ftp://console.nace.ai/v1", "the scheme must be https"],
+  ])("%s is refused with its own reason", async (url, reason) => {
+    const { stderr } = await runHook("jev_policy.py", payload, { ...nace(), NACE_BASE_URL: url });
+    expect(stderr.trim()).toBe(`[jev-router] nace: refusing to send the key to console.nace.ai: ${reason}`);
+    expect(stderr).not.toContain("hunter2");
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  test("an empty NACE_BASE_URL or NACE_MODEL means unset, as in the plugin", async () => {
+    const proc = Bun.spawn([python as string, "-c", "import jev_client as j; c = j.config(); print(c['url'], c['model'])"], {
+      cwd: hooks,
+      stdout: "pipe",
+      env: { PATH: process.env["PATH"] ?? "", JEV_PROVIDER: "nace", NACE_API_KEY: "nace_sk_testkey", NACE_BASE_URL: "", NACE_MODEL: "" },
+    });
+    expect((await new Response(proc.stdout).text()).trim()).toBe(`https://console.nace.ai/v1/systemone ${NACE.defaultModel}`);
   });
 });

@@ -5,7 +5,7 @@ import {
   choiceMargin,
   confidence,
   decisionsRequest,
-  naceUrlAllowed,
+  naceUrlProblem,
   ranked,
   resolveBackend,
   systemOne,
@@ -61,6 +61,11 @@ describe("resolveBackend", () => {
       { TYPESAFE_API_KEY: "ts", OPENROUTER_API_KEY: "sk-or", TYPESAFE_ENDPOINT: "https://other", TYPESAFE_MODEL: "jev-latest", JEV_ENDPOINT: "https://other" },
     );
     expect(b).toEqual({ provider: "nace", apiKey: "", endpoint: "", model: "drex-v2.0", problem: "No API key set (NACE_API_KEY)" });
+  });
+
+  test("an empty NACE_BASE_URL or NACE_MODEL means unset, as in the hooks", () => {
+    const b = resolveBackend({ provider: "nace" }, { NACE_API_KEY: "k", NACE_BASE_URL: "", NACE_MODEL: "" });
+    expect(decisionsRequest(b)).toEqual({ url: "https://console.nace.ai/v1/systemone", model: NACE.defaultModel });
   });
 
   test("the option beats JEV_PROVIDER", () => {
@@ -160,14 +165,19 @@ describe("decisionsRequest nace", () => {
   });
 });
 
-describe("naceUrlAllowed", () => {
-  test("https and loopback http only, no credentials in the url", () => {
-    expect(naceUrlAllowed("https://console.nace.ai/v1/systemone")).toBe(true);
-    expect(naceUrlAllowed("http://127.0.0.1:3000/v1/systemone")).toBe(true);
-    expect(naceUrlAllowed("http://localhost:3000/v1/systemone")).toBe(true);
-    expect(naceUrlAllowed("http://console.nace.ai/v1/systemone")).toBe(false);
-    expect(naceUrlAllowed("https://user:pw@console.nace.ai/v1/systemone")).toBe(false);
-    expect(naceUrlAllowed("not a url")).toBe(false);
+describe("naceUrlProblem", () => {
+  test("https and loopback http are fine", () => {
+    expect(naceUrlProblem("https://console.nace.ai/v1/systemone")).toBeNull();
+    expect(naceUrlProblem("http://127.0.0.1:3000/v1/systemone")).toBeNull();
+    expect(naceUrlProblem("http://localhost:3000/v1/systemone")).toBeNull();
+    expect(naceUrlProblem("http://[::1]:3000/v1/systemone")).toBeNull();
+  });
+
+  test("each refusal says its own reason, not a hint that fits only one of them", () => {
+    expect(naceUrlProblem("http://console.nace.ai/v1/systemone")).toBe("plain http is only allowed to localhost, 127.0.0.1 or ::1");
+    expect(naceUrlProblem("https://user:pw@console.nace.ai/v1/systemone")).toBe("the URL contains credentials");
+    expect(naceUrlProblem("ftp://console.nace.ai/v1/systemone")).toBe("the scheme must be https");
+    expect(naceUrlProblem("not a url")).toBe("not a valid URL");
   });
 });
 
@@ -192,6 +202,7 @@ describe("systemOne against nace", () => {
     const [r] = fake.requests;
     expect(r.path).toBe("/v1/systemone");
     expect(r.headers.get("x-nace-client")).toBe(NACE_CLIENT);
+    expect(NACE_CLIENT).toBe(`jev-router-opencode/${NACE.clientVersion}`);
     expect(NACE_CLIENT).toMatch(/^jev-router-opencode\/\d+\.\d+\.\d+$/);
     expect(NACE_CLIENT.length).toBeLessThanOrEqual(64);
     expect(NACE_CLIENT).toMatch(/^[A-Za-z0-9 ._@+-]+\/[A-Za-z0-9 ._@+-]+$/);
@@ -256,7 +267,13 @@ describe("systemOne against nace", () => {
   test("plain http to a non-loopback host sends nothing", async () => {
     const res = await systemOne({}, questions, { ...nace(), endpoint: "http://203.0.113.9/v1" });
     expect(res).toBeNull();
-    expect(errors[0]).toContain("refusing to send the key to http://203.0.113.9");
+    expect(errors).toEqual(["[jev-router] nace: refusing to send the key to http://203.0.113.9: plain http is only allowed to localhost, 127.0.0.1 or ::1"]);
     expect(fake.requests).toHaveLength(0);
+  });
+
+  test("a URL with credentials in it is refused with that reason, and the credentials are not echoed", async () => {
+    const res = await systemOne({}, questions, { ...nace(), endpoint: "https://user:hunter2@console.nace.ai/v1" });
+    expect(res).toBeNull();
+    expect(errors).toEqual(["[jev-router] nace: refusing to send the key to https://console.nace.ai: the URL contains credentials"]);
   });
 });

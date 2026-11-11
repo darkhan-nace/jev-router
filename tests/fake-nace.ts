@@ -16,7 +16,8 @@ export interface FakeNace {
 
 export const REQUEST_ID = "req_0123456789abcdef0123456789abcdef";
 
-/** Answers every question by type: a choice picks its first option, a noul says 0.8. */
+/** Answers every question by type, in the shapes openapi.json defines: a choice picks its first option,
+ *  a noul says 0.8 with confidence max(noul, 1 - noul), a score of level 1 carries a probability per level index. */
 export function drexAnswer(r: Recorded): Response {
   const answers: Record<string, unknown> = {};
   for (const [id, q] of Object.entries<any>(r.body.questions)) {
@@ -26,9 +27,11 @@ export function drexAnswer(r: Recorded): Response {
       const probabilities = Object.fromEntries(options.map((o, i) => [o, i === 0 ? 0.7 : rest]));
       answers[id] = { type: "choice", choice: options[0], confidence: 0.7, probabilities };
     } else if (q.type === "score") {
-      answers[id] = { type: "score", score: 1, legend: q.criteria, probabilities: {}, confidence: 0.5 };
+      const levels = Array.isArray(q.criteria) ? q.criteria : Object.values<string>(q.criteria);
+      const probabilities = Object.fromEntries(levels.map((_, i) => [String(i), i === 1 ? 0.7 : 0.3 / Math.max(1, levels.length - 1)]));
+      answers[id] = { type: "score", score: 1, legend: levels, probabilities, confidence: 0.7 };
     } else {
-      answers[id] = { type: "noul", noul: 0.8 };
+      answers[id] = { type: "noul", noul: 0.8, confidence: 0.8 };
     }
   }
   return Response.json({

@@ -2,7 +2,6 @@
 // so Cursor-side TS (if ever needed) and unit tests can import it directly.
 
 import nace from "./nace.json" with { type: "json" };
-import pkg from "./package.json" with { type: "json" };
 
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai";
 export const DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai";
@@ -12,7 +11,7 @@ export const DEFAULT_OPENROUTER_MODEL = "typesafe/jev-1.13";
 // Nace is never auto-detected: it is chosen with `provider: "nace"` or JEV_PROVIDER=nace.
 // nace.json is shared with .cursor/hooks/nace.json (tests/nace.test.ts keeps them identical).
 export const NACE = nace;
-export const NACE_CLIENT = `${nace.clients.opencode}/${pkg.version}`;
+export const NACE_CLIENT = `${nace.clients.opencode}/${nace.clientVersion}`;
 
 export const PROVIDERS = ["typesafe", "openrouter", "nace"] as const;
 export type Provider = (typeof PROVIDERS)[number];
@@ -64,7 +63,7 @@ function pickBackend(
       provider,
       apiKey: env[nace.keyEnv] ?? "",
       endpoint: env[nace.baseUrlEnv] ?? "",
-      model: env[nace.modelEnv] ?? nace.defaultModel,
+      model: env[nace.modelEnv] || nace.defaultModel,
     };
   }
   const openrouter = provider === "openrouter";
@@ -82,16 +81,20 @@ function noKeyProblem(provider: Provider, env: Record<string, string | undefined
   return env[nace.keyEnv] ? `${base}; ${nace.keyEnv} is set, but Nace needs JEV_PROVIDER=nace` : base;
 }
 
-/** Nace carries the key, so it goes only over https, or http to this machine. */
-export function naceUrlAllowed(url: string): boolean {
+/** Nace carries the key, so it goes only over https, or http to this machine. Null when the URL is fine, else why not. */
+export function naceUrlProblem(url: string): string | null {
+  let u: URL;
   try {
-    const u = new URL(url);
-    if (u.username || u.password) return false;
-    if (u.protocol === "https:") return true;
-    return u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+    u = new URL(url);
   } catch {
-    return false;
+    return "not a valid URL";
   }
+  if (u.username || u.password) return "the URL contains credentials";
+  if (u.protocol === "https:") return null;
+  if (u.protocol !== "http:") return "the scheme must be https";
+  return ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
+    ? null
+    : "plain http is only allowed to localhost, 127.0.0.1 or ::1";
 }
 
 export interface JevOptions {
@@ -160,8 +163,10 @@ export async function systemOne(
 ): Promise<SystemOneResponse | null> {
   const { url, model } = decisionsRequest(opts);
   const isNace = opts.provider === "nace";
-  if (isNace && !naceUrlAllowed(url)) {
-    console.error(`[jev-router] nace: refusing to send the key to ${new URL(url, "http://invalid").origin}; use https or a loopback host`);
+  const refusal = isNace ? naceUrlProblem(url) : null;
+  if (refusal) {
+    const origin = URL.canParse(url) ? new URL(url).origin : "that URL";
+    console.error(`[jev-router] nace: refusing to send the key to ${origin}: ${refusal}`);
     return null;
   }
   const timeoutMs = opts.timeoutMs ?? 8000;

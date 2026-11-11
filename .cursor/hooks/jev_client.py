@@ -20,7 +20,6 @@ DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai"
 DEFAULT_MODEL = "jev-latest"
 DEFAULT_OPENROUTER_MODEL = "typesafe/jev-1.13"
 TIMEOUT_S = 12
-VERSION = "0.1.0"
 
 PROVIDERS = ("typesafe", "openrouter", "nace")
 
@@ -44,18 +43,23 @@ def _no_key(provider, problem=None):
     return {"provider": provider, "api_key": "", "url": "", "model": "", "nace": None, "problem": problem}
 
 
-def nace_url_allowed(url):
-    """Nace carries the key, so it goes only over https, or http to this machine."""
+def nace_url_problem(url):
+    """Nace carries the key, so it goes only over https, or http to this machine.
+    None when the URL is fine, else why not."""
     try:
         u = urllib.parse.urlsplit(url)
         host = u.hostname or ""
     except ValueError:
-        return False
+        return "not a valid URL"
     if u.username or u.password:
-        return False
+        return "the URL contains credentials"
     if u.scheme == "https":
-        return bool(host)
-    return u.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
+        return None if host else "not a valid URL"
+    if u.scheme != "http":
+        return "the scheme must be https"
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return None
+    return "plain http is only allowed to localhost, 127.0.0.1 or ::1"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -154,9 +158,10 @@ def system_one(state, questions, timeout=TIMEOUT_S, model=None):
         if cfg.get("problem"):
             _log_once(cfg["problem"] + "; Jev calls will be skipped (fail open).")
         return None
-    if is_nace and not nace_url_allowed(cfg["url"]):
+    refusal = nace_url_problem(cfg["url"]) if is_nace else None
+    if refusal:
         host = urllib.parse.urlsplit(cfg["url"]).hostname or "that URL"
-        _log("nace: refusing to send the key to %s; use https or a loopback host" % host)
+        _log("nace: refusing to send the key to %s: %s" % (host, refusal))
         return None
     body = json.dumps(
         {
@@ -170,7 +175,7 @@ def system_one(state, questions, timeout=TIMEOUT_S, model=None):
         "Authorization": "Bearer " + cfg["api_key"],
     }
     if is_nace:
-        headers[cfg["nace"]["attributionHeader"]] = cfg["nace"]["clients"]["cursor"] + "/" + VERSION
+        headers[cfg["nace"]["attributionHeader"]] = cfg["nace"]["clients"]["cursor"] + "/" + cfg["nace"]["clientVersion"]
     req = urllib.request.Request(cfg["url"], data=body, headers=headers, method="POST")
     # urllib forwards Authorization across a redirect; Nace never redirects, so refuse one.
     open_url = urllib.request.build_opener(_NoRedirect).open if is_nace else urllib.request.urlopen
