@@ -59,7 +59,7 @@ describe.skipIf(!python)("cursor hooks against nace", () => {
     expect(r.headers.get("x-nace-client")).toBe(`jev-router-cursor/${NACE.clientVersion}`);
     expect(NACE.clientVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(r.headers.get("authorization")).toBe("Bearer nace_sk_testkey");
-    expect(r.body.model).toBe("drex-v2.0");
+    expect(r.body.model).toBe("drex-max-v1.1");
     expect(Object.keys(r.body.questions)).toEqual(["verdict"]);
     expect(r.body.state.pending_action).toBe("rm -rf build");
     expect(stdout.permission).toBe("ask");
