@@ -78,16 +78,19 @@ default `stop`) and `reviewModel` (`auto` or pinned id). See `opencode.jsonc`.
 
 - One API key: `TYPESAFE_API_KEY` (https://console.typesafe.ai/keys) **or**
   `OPENROUTER_API_KEY` (https://openrouter.ai/settings/keys). `TYPESAFE_API_KEY`
-  wins when both are set.
-- No GPU, no local model. Either way Jev is hosted.
+  wins when both are set. To use [Nace](#nace-backend) instead, `NACE_API_KEY`
+  plus an explicit `JEV_PROVIDER=nace`; a Nace key alone selects nothing.
+- No GPU, no local model. Jev is hosted by TypeSafe, directly or through
+  OpenRouter, and Nace's Drex models are hosted by Nace.
 
 | Provider | Endpoint | Default model |
 | --- | --- | --- |
 | TypeSafe direct | `POST https://api.typesafe.ai/v1/systemone` | `jev-latest` |
 | OpenRouter | `POST https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.13` (pinned; use `~typesafe/jev-latest` to track releases) |
+| Nace (explicit) | `POST https://console.nace.ai/v1/systemone` | `drex-max-v1.1` (pinned) |
 
-Same question shape on both; OpenRouter adds `usage.cost` per call. Same price:
-$0.042 per Mtok input, output free. Tutorial:
+Same question shape on TypeSafe and OpenRouter; OpenRouter adds `usage.cost` per
+call. Both price Jev at $0.042 per Mtok input, output free. Tutorial:
 https://openrouter.ai/docs/guides/community/jev-tutorial
 
 ## Layout
@@ -140,6 +143,80 @@ cp skills/jev-router/SKILL.md ~/.agents/skills/jev-router/SKILL.md
 
 The upstream TypeSafe skill (teaches the LLM to write TypeSafe calls) is separate:
 https://github.com/typesafe-ai/skills/blob/main/skills/typesafe-ai/SKILL.md
+
+## Nace backend
+
+[Nace](https://console.nace.ai) runs Drex, a decision model with the same typed `choice`,
+`noul` and `score` questions at `POST /v1/systemone`, so the question builders, thresholds,
+timeouts and fail-open behavior are unchanged. Nace is opt-in. No key or variable selects it by itself, and while it is selected the
+`TYPESAFE_*`, `OPENROUTER_*` and `JEV_ENDPOINT` variables are ignored.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `JEV_PROVIDER=nace` | Choose Nace (OpenCode also accepts `provider: "nace"` in the plugin options) | unset |
+| `NACE_API_KEY` | Your `nace_sk_` key, created on the API Keys page of https://console.nace.ai | none, calls are skipped |
+| `NACE_MODEL` | `drex-max-v1.1`, `drex-v2.0` or the `drex-latest` alias | `drex-max-v1.1` |
+| `NACE_BASE_URL` | API base URL, https or loopback http only | `https://console.nace.ai/v1` |
+
+- **Model.** The default is a pinned version so behaviour does not move when the `drex-latest`
+  alias does. It is the model that matched more expected labels on this repo's 46 live eval
+  fixtures, see [thresholds](#nace-thresholds). A model your key cannot use returns 422.
+- **Billing.** Nace bills per input token. An empty balance returns 402.
+- **Options.** While Nace is selected the plugin's generic `apiKey`, `endpoint` and `model`
+  options are ignored, because they are TypeSafe and OpenRouter settings (this repo's own
+  `opencode.jsonc` sets `model` to `jev-latest`). Use the variables above.
+- **Attribution.** Every request carries `X-Nace-Client: jev-router-opencode/<version>` (OpenCode
+  plugin) or `jev-router-cursor/<version>` (Cursor hooks), so Nace can attribute traffic from this
+  integration. The endpoint, key variable, default model, header and client names live in
+  `nace.json`, kept identical in `plugins/jev-router/` and `.cursor/hooks/`.
+- **Failures.** A bad key (401), a model the key cannot use (422), no balance (402), a timeout or a
+  refused URL prints one line on stderr (status, error type, `request_id`; never the message or the
+  key), then fails open as before. A request never follows a redirect and is never retried on
+  another provider. An unknown `JEV_PROVIDER` or `provider` value prints one line naming the valid
+  values and skips Jev. In OpenCode run with `--print-logs` to see plugin stderr.
+- **Plain http.** `NACE_BASE_URL` may be http only for localhost, 127.0.0.1 or `::1`, for testing.
+  Such a request still goes through `http_proxy` when one is set, so add the address to
+  `no_proxy` if the proxy should not see it.
+
+OpenCode v2:
+
+```sh
+opencode plugin add 'git+https://github.com/drmaas/jev-router.git#path:plugins/jev-router'
+export JEV_PROVIDER=nace NACE_API_KEY=nace_sk_replace-with-real-key
+```
+
+or choose it in the project's `opencode.jsonc`, with the key still in the environment:
+
+```jsonc
+{ "plugins": [{ "package": "git+https://github.com/drmaas/jev-router.git#path:plugins/jev-router",
+                "options": { "provider": "nace" } }] }
+```
+
+Cursor: copy `.cursor/hooks.json` and the whole `.cursor/hooks/` folder (including `nace.json`),
+and launch Cursor from a shell that has `JEV_PROVIDER=nace` and `NACE_API_KEY` exported, because
+hooks inherit Cursor's environment. The policy hook allows the command when Nace fails, as it
+does when Jev fails.
+
+### Nace thresholds
+
+The thresholds (`gateThreshold`, `fitsThreshold`, the stop, clarify and review cutoffs) were tuned
+on Jev, and the Nace models were not retuned. Replaying the same 46 fixtures
+(`JEV_PROVIDER=nace NACE_MODEL=<id> bun tests/eval-harness.ts --live`, outputs in
+`docs/eval-nace-*.json`) at the committed thresholds matched fewer expected labels than the
+committed `typesafe/jev-1.13` run. One run per model, small n:
+
+| Bucket | `jev-1.13` (run3) | `drex-max-v1.1` | `drex-v2.0` |
+| --- | --- | --- | --- |
+| Skill steering | 14/16 | 15/16 | 14/16 |
+| Permission verdicts | 6/6 | 4/6 | 4/6 |
+| Stop verifier | 3/4 | 4/4 | 3/4 |
+| Tool steering | 5/6 | 4/6 | 5/6 |
+| Clarify | 3/4 | 3/4 | 2/4 |
+| Failure advisor | 3/4 | 3/4 | 3/4 |
+| Review type | 4/6 | 4/6 | 2/6 |
+| Total | 38/46 | 37/46 | 33/46 |
+
+Both Drex models answered `ask` where `deny` was expected on P06. Keep `autoPermission: false`.
 
 ## What Jev is not
 

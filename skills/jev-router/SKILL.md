@@ -56,7 +56,8 @@ https://docs.typesafe.ai/patterns/confidence-routing.md
 - Auth: `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` (auto-detected; all calls fail open without one).
 - Providers: TypeSafe direct (`/v1/systemone`, `jev-latest`) or OpenRouter
   (`/api/alpha/decisions`, `typesafe/jev-1.13`). Set `provider` explicitly to
-  override auto-detect.
+  override auto-detect. Nace (`/v1/systemone`, `drex-max-v1.1`, `NACE_API_KEY`) is
+  never auto-detected: choose it with `provider: "nace"` or `JEV_PROVIDER=nace`.
 - State budget: distil transcripts to ~4000 chars (`request` + `recent_context`).
   Jev caps `state` at 32k tokens; never send a raw transcript.
 
